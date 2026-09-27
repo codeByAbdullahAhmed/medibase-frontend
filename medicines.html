@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Medicines — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("medicines", "Medicines");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Medicines</h2><p>Inventory used to fill out prescriptions.</p></div>
+      <button class="btn btn-primary" id="addBtn">Add medicine</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Unit price</th><th>Stock</th><th>Expiry</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let meds = [];
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!meds.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No medicines yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = meds.map((m) => {
+      const low = (m.stock_quantity ?? 0) < 20;
+      return `
+      <tr>
+        <td>#${m.medicine_id}</td>
+        <td>${m.medicine_name}</td>
+        <td>${m.category || "—"}</td>
+        <td>Rs ${Number(m.unit_price ?? 0).toFixed(2)}</td>
+        <td>${low ? `<span class="badge unpaid">${m.stock_quantity}</span>` : (m.stock_quantity ?? "—")}</td>
+        <td>${m.expiry_date || "—"}</td>
+        <td class="row-actions">
+          <button data-edit="${m.medicine_id}">Edit</button>
+          <button data-del="${m.medicine_id}" class="del">Delete</button>
+        </td>
+      </tr>`;
+    }).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(meds.find(x => x.medicine_id == b.dataset.edit)));
+    tbody.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => removeMed(b.dataset.del));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      meds = await api.list("medicines");
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  async function removeMed(id) {
+    if (!confirm("Delete this medicine from inventory?")) return;
+    try {
+      await api.remove("medicines", id);
+      showToast("Medicine deleted.");
+      load();
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  function openModal(med) {
+    const editing = !!med;
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit medicine" : "Add medicine"}</h3>
+      <form id="mForm">
+        <div class="grid-2">
+          <div class="field"><label>Name</label><input class="input" name="medicine_name" required value="${med?.medicine_name || ""}" autofocus></div>
+          <div class="field"><label>Category</label><input class="input" name="category" value="${med?.category || ""}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Unit price</label><input class="input" type="number" step="0.01" min="0" name="unit_price" value="${med?.unit_price ?? ""}"></div>
+          <div class="field"><label>Stock quantity</label><input class="input" type="number" min="0" name="stock_quantity" value="${med?.stock_quantity ?? ""}"></div>
+        </div>
+        <div class="field"><label>Expiry date</label><input class="input" type="date" name="expiry_date" value="${med?.expiry_date || ""}"></div>
+        <div id="mErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#mForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        medicine_name: fd.get("medicine_name"),
+        category: fd.get("category") || null,
+        unit_price: fd.get("unit_price") ? Number(fd.get("unit_price")) : 0,
+        stock_quantity: fd.get("stock_quantity") ? Number(fd.get("stock_quantity")) : 0,
+        expiry_date: fd.get("expiry_date") || null,
+      };
+      try {
+        if (editing) await api.update("medicines", med.medicine_id, body);
+        else await api.create("medicines", body);
+        overlay.remove();
+        showToast(editing ? "Medicine updated." : "Medicine added.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#mErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>

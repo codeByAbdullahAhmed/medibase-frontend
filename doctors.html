@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doctors — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("doctors", "Doctors");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Doctors</h2><p>Every doctor on staff, linked to their department.</p></div>
+      <button class="btn btn-primary" id="addBtn">Add doctor</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Name</th><th>Specialization</th><th>Department</th><th>Phone</th><th>Email</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let departments = [];
+  let doctors = [];
+
+  function deptName(id) {
+    const d = departments.find((x) => x.department_id === id);
+    return d ? d.department_name : (id ? `#${id}` : "—");
+  }
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!doctors.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No doctors yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = doctors.map((d) => `
+      <tr>
+        <td>#${d.doctor_id}</td>
+        <td>${d.doctor_name}</td>
+        <td>${d.specialization || "—"}</td>
+        <td>${deptName(d.department_id)}</td>
+        <td>${d.phone || "—"}</td>
+        <td>${d.email || "—"}</td>
+        <td class="row-actions">
+          <button data-edit="${d.doctor_id}">Edit</button>
+          <button data-del="${d.doctor_id}" class="del">Delete</button>
+        </td>
+      </tr>`).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(doctors.find(x => x.doctor_id == b.dataset.edit)));
+    tbody.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => removeDoctor(b.dataset.del));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      [departments, doctors] = await Promise.all([api.list("departments"), api.list("doctors")]);
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  async function removeDoctor(id) {
+    if (!confirm("Remove this doctor?")) return;
+    try {
+      await api.remove("doctors", id);
+      showToast("Doctor removed.");
+      load();
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  function deptOptions(selectedId) {
+    if (!departments.length) return `<option value="">No departments yet</option>`;
+    return `<option value="">—</option>` + departments.map((d) =>
+      `<option value="${d.department_id}" ${d.department_id === selectedId ? "selected" : ""}>${d.department_name}</option>`
+    ).join("");
+  }
+
+  function openModal(doctor) {
+    const editing = !!doctor;
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit doctor" : "Add doctor"}</h3>
+      <form id="docForm">
+        <div class="field"><label>Full name</label><input class="input" name="doctor_name" required value="${doctor?.doctor_name || ""}" autofocus></div>
+        <div class="grid-2">
+          <div class="field"><label>Specialization</label><input class="input" name="specialization" value="${doctor?.specialization || ""}"></div>
+          <div class="field"><label>Department</label><select class="input" name="department_id">${deptOptions(doctor?.department_id)}</select></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Phone</label><input class="input" name="phone" value="${doctor?.phone || ""}"></div>
+          <div class="field"><label>Email</label><input class="input" type="email" name="email" value="${doctor?.email || ""}"></div>
+        </div>
+        <div id="docErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#docForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        doctor_name: fd.get("doctor_name"),
+        specialization: fd.get("specialization") || null,
+        phone: fd.get("phone") || null,
+        email: fd.get("email") || null,
+        department_id: fd.get("department_id") ? Number(fd.get("department_id")) : null,
+      };
+      try {
+        if (editing) await api.update("doctors", doctor.doctor_id, body);
+        else await api.create("doctors", body);
+        overlay.remove();
+        showToast(editing ? "Doctor updated." : "Doctor added.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#docErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>

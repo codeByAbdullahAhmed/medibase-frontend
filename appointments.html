@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Appointments — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("appointments", "Appointments");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Appointments</h2><p>Book, update, or cancel visits between patients and doctors.</p></div>
+      <button class="btn btn-primary" id="addBtn">Book appointment</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Patient</th><th>Doctor</th><th>Date</th><th>Time</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let patients = [], doctors = [], appts = [];
+  const pName = (id) => patients.find(p => p.patient_id === id)?.patient_name || `#${id}`;
+  const dName = (id) => doctors.find(d => d.doctor_id === id)?.doctor_name || `#${id}`;
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!appts.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No appointments yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = appts.map((a) => {
+      const cancelled = (a.status || "").toLowerCase() === "cancelled";
+      return `
+      <tr>
+        <td>#${a.appointment_id}</td>
+        <td>${pName(a.patient_id)}</td>
+        <td>${dName(a.doctor_id)}</td>
+        <td>${a.appointment_date}</td>
+        <td>${a.appointment_time || "—"}</td>
+        <td>${a.reason || "—"}</td>
+        <td>${badge(a.status)}</td>
+        <td class="row-actions">
+          <button data-edit="${a.appointment_id}">Edit</button>
+          ${cancelled ? "" : `<button data-cancel="${a.appointment_id}" class="del">Cancel</button>`}
+        </td>
+      </tr>`;
+    }).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(appts.find(x => x.appointment_id == b.dataset.edit)));
+    tbody.querySelectorAll("[data-cancel]").forEach((b) => b.onclick = () => cancelAppt(b.dataset.cancel));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      [patients, doctors, appts] = await Promise.all([api.list("patients"), api.list("doctors"), api.list("appointments")]);
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="8" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  async function cancelAppt(id) {
+    if (!confirm("Cancel this appointment?")) return;
+    try {
+      await api.remove("appointments", id);
+      showToast("Appointment cancelled.");
+      load();
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  const opts = (list, valKey, labelFn, sel) => `<option value="">—</option>` + list.map((x) =>
+    `<option value="${x[valKey]}" ${x[valKey] === sel ? "selected" : ""}>${labelFn(x)}</option>`).join("");
+  const statusOptions = (sel) => ["Scheduled", "Completed", "Cancelled"].map((s) =>
+    `<option value="${s}" ${s === sel ? "selected" : ""}>${s}</option>`).join("");
+
+  function openModal(appt) {
+    const editing = !!appt;
+    if (!patients.length || !doctors.length) { showToast("Add at least one patient and doctor first.", true); return; }
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit appointment" : "Book appointment"}</h3>
+      <form id="aForm">
+        <div class="grid-2">
+          <div class="field"><label>Patient</label><select class="input" name="patient_id" required>${opts(patients, "patient_id", p => p.patient_name, appt?.patient_id)}</select></div>
+          <div class="field"><label>Doctor</label><select class="input" name="doctor_id" required>${opts(doctors, "doctor_id", d => d.doctor_name, appt?.doctor_id)}</select></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Date</label><input class="input" type="date" name="appointment_date" required value="${appt?.appointment_date || ""}"></div>
+          <div class="field"><label>Time</label><input class="input" type="time" name="appointment_time" step="1" value="${(appt?.appointment_time || "").slice(0,5)}"></div>
+        </div>
+        <div class="field"><label>Reason</label><input class="input" name="reason" value="${appt?.reason || ""}"></div>
+        ${editing ? `<div class="field"><label>Status</label><select class="input" name="status">${statusOptions(appt?.status)}</select></div>` : ""}
+        <div id="aErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#aForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        patient_id: Number(fd.get("patient_id")),
+        doctor_id: Number(fd.get("doctor_id")),
+        appointment_date: fd.get("appointment_date"),
+        appointment_time: fd.get("appointment_time") ? fd.get("appointment_time") + ":00" : null,
+        reason: fd.get("reason") || null,
+      };
+      if (editing) body.status = fd.get("status");
+      try {
+        if (editing) await api.update("appointments", appt.appointment_id, body);
+        else await api.create("appointments", body);
+        overlay.remove();
+        showToast(editing ? "Appointment updated." : "Appointment booked.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#aErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>

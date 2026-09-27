@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("dashboard", "Dashboard");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Overview</h2><p>Live counts pulled from your backend just now.</p></div>
+    </div>
+    <div class="stat-grid" id="stats">
+      <div class="stat-card"><div class="num">—</div><div class="label">Loading…</div></div>
+    </div>
+    <div class="page-head"><div><h2>Today's appointments</h2></div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Time</th><th>Patient</th><th>Doctor</th><th>Reason</th><th>Status</th></tr></thead>
+      <tbody id="todayRows"><tr><td colspan="5" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  const cards = [
+    { key: "departments", label: "Departments" },
+    { key: "doctors", label: "Doctors" },
+    { key: "patients", label: "Patients" },
+    { key: "appointments", label: "Appointments" },
+    { key: "admissions", label: "Active admissions", filter: (r) => (r.status || "").toLowerCase() === "admitted" },
+    { key: "bills", label: "Unpaid bills", filter: (r) => (r.payment_status || "").toLowerCase() !== "paid" },
+  ];
+
+  const statsEl = document.getElementById("stats");
+  statsEl.innerHTML = "";
+  const results = await Promise.all(cards.map(async (c) => {
+    try {
+      const rows = await api.list(c.key);
+      const list = Array.isArray(rows) ? rows : [];
+      return { ...c, count: c.filter ? list.filter(c.filter).length : list.length, rows: list };
+    } catch (e) {
+      return { ...c, count: "—", rows: [] };
+    }
+  }));
+
+  results.forEach((r) => {
+    statsEl.insertAdjacentHTML("beforeend", `
+      <div class="stat-card"><div class="num">${r.count}</div><div class="label">${r.label}</div></div>
+    `);
+  });
+
+  const appts = results.find((r) => r.key === "appointments")?.rows || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const todays = appts.filter((a) => a.appointment_date === today);
+  const tbody = document.getElementById("todayRows");
+  if (!todays.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No appointments scheduled for today.</td></tr>`;
+  } else {
+    tbody.innerHTML = todays.map((a) => `
+      <tr>
+        <td>${a.appointment_time || "—"}</td>
+        <td>Patient #${a.patient_id}</td>
+        <td>Doctor #${a.doctor_id}</td>
+        <td>${a.reason || "—"}</td>
+        <td>${badge(a.status)}</td>
+      </tr>`).join("");
+  }
+})();
+</script>
+</body>
+</html>

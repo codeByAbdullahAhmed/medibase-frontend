@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bills — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("bills", "Bills");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Bills</h2><p>Charges per patient, with running paid / due totals.</p></div>
+      <button class="btn btn-primary" id="addBtn">Create bill</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Patient</th><th>Date</th><th>Description</th><th>Total</th><th>Paid</th><th>Due</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="9" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let patients = [], bills = [];
+  const pName = (id) => patients.find(p => p.patient_id === id)?.patient_name || `#${id}`;
+  const money = (n) => `Rs ${Number(n ?? 0).toFixed(2)}`;
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!bills.length) {
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">No bills yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = bills.map((b) => {
+      const due = Number(b.total_amount ?? 0) - Number(b.paid_amount ?? 0);
+      const paid = (b.payment_status || "").toLowerCase() === "paid";
+      return `
+      <tr>
+        <td>#${b.bill_id}</td>
+        <td>${pName(b.patient_id)}</td>
+        <td>${b.bill_date}</td>
+        <td>${b.description || "—"}</td>
+        <td>${money(b.total_amount)}</td>
+        <td>${money(b.paid_amount)}</td>
+        <td>${money(due)}</td>
+        <td>${badge(b.payment_status)}</td>
+        <td class="row-actions">
+          <button data-edit="${b.bill_id}">Edit</button>
+          ${paid ? "" : `<button data-paid="${b.bill_id}">Mark paid</button>`}
+        </td>
+      </tr>`;
+    }).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(bills.find(x => x.bill_id == b.dataset.edit)));
+    tbody.querySelectorAll("[data-paid]").forEach((b) => b.onclick = () => markPaid(b.dataset.paid));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      [patients, bills] = await Promise.all([api.list("patients"), api.list("bills")]);
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  async function markPaid(id) {
+    const bill = bills.find((b) => b.bill_id == id);
+    try {
+      await api.update("bills", id, { paid_amount: bill.total_amount, payment_status: "Paid" });
+      showToast("Bill marked as paid.");
+      load();
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  const opts = (list, valKey, labelFn, sel) => `<option value="">—</option>` + list.map((x) =>
+    `<option value="${x[valKey]}" ${x[valKey] === sel ? "selected" : ""}>${labelFn(x)}</option>`).join("");
+  const statusOptions = (sel) => ["Unpaid", "Partial", "Paid"].map((s) =>
+    `<option value="${s}" ${s === sel ? "selected" : ""}>${s}</option>`).join("");
+
+  function openModal(bill) {
+    const editing = !!bill;
+    if (!patients.length) { showToast("Add at least one patient first.", true); return; }
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit bill" : "Create bill"}</h3>
+      <form id="bForm">
+        <div class="grid-2">
+          <div class="field"><label>Patient</label><select class="input" name="patient_id" required>${opts(patients, "patient_id", p => p.patient_name, bill?.patient_id)}</select></div>
+          <div class="field"><label>Bill date</label><input class="input" type="date" name="bill_date" required value="${bill?.bill_date || new Date().toISOString().slice(0,10)}"></div>
+        </div>
+        <div class="field"><label>Description</label><input class="input" name="description" value="${bill?.description || ""}"></div>
+        <div class="grid-2">
+          <div class="field"><label>Total amount</label><input class="input" type="number" step="0.01" min="0" name="total_amount" required value="${bill?.total_amount ?? ""}"></div>
+          <div class="field"><label>Paid amount</label><input class="input" type="number" step="0.01" min="0" name="paid_amount" value="${bill?.paid_amount ?? 0}"></div>
+        </div>
+        <div class="field"><label>Payment status</label><select class="input" name="payment_status">${statusOptions(bill?.payment_status || "Unpaid")}</select></div>
+        <div id="bErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#bForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        patient_id: Number(fd.get("patient_id")),
+        bill_date: fd.get("bill_date"),
+        description: fd.get("description") || null,
+        total_amount: Number(fd.get("total_amount")),
+        paid_amount: fd.get("paid_amount") ? Number(fd.get("paid_amount")) : 0,
+        payment_status: fd.get("payment_status"),
+      };
+      try {
+        if (editing) await api.update("bills", bill.bill_id, body);
+        else await api.create("bills", body);
+        overlay.remove();
+        showToast(editing ? "Bill updated." : "Bill created.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#bErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>

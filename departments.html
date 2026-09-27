@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Departments — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("departments", "Departments");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Departments</h2><p>The wards and specialities doctors belong to.</p></div>
+      <button class="btn btn-primary" id="addBtn">Add department</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Department</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="2" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      const list = await api.list("departments");
+      if (!list.length) {
+        tbody.innerHTML = `<tr><td colspan="2" class="empty-state">No departments yet. Add the first one to unlock doctor records.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = list.map((d) => `
+        <tr><td>#${d.department_id}</td><td>${d.department_name}</td></tr>
+      `).join("");
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="2" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  function openModal() {
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>Add department</h3>
+      <form id="deptForm">
+        <div class="field"><label>Department name</label><input class="input" name="department_name" required autofocus></div>
+        <div id="deptErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#deptForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = new FormData(e.target).get("department_name");
+      try {
+        await api.create("departments", { department_name: name });
+        overlay.remove();
+        showToast("Department added.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#deptErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = openModal;
+  load();
+})();
+</script>
+</body>
+</html>

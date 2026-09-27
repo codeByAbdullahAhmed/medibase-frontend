@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rooms — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("rooms", "Rooms");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Rooms</h2><p>Status updates automatically when a patient is admitted or discharged.</p></div>
+      <button class="btn btn-primary" id="addBtn">Add room</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Room #</th><th>Type</th><th>Floor</th><th>Capacity</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let rooms = [];
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!rooms.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No rooms yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rooms.map((r) => `
+      <tr>
+        <td>${r.room_number}</td>
+        <td>${r.room_type || "—"}</td>
+        <td>${r.floor ?? "—"}</td>
+        <td>${r.capacity ?? "—"}</td>
+        <td>${badge(r.status)}</td>
+        <td class="row-actions"><button data-edit="${r.room_id}">Edit</button></td>
+      </tr>`).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(rooms.find(x => x.room_id == b.dataset.edit)));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      rooms = await api.list("rooms");
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  function statusOptions(sel) {
+    return ["Available", "Occupied", "Maintenance"].map((s) =>
+      `<option value="${s}" ${s === sel ? "selected" : ""}>${s}</option>`).join("");
+  }
+
+  function openModal(room) {
+    const editing = !!room;
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit room" : "Add room"}</h3>
+      <form id="rForm">
+        <div class="grid-2">
+          <div class="field"><label>Room number</label><input class="input" name="room_number" required value="${room?.room_number || ""}" autofocus></div>
+          <div class="field"><label>Room type</label><input class="input" name="room_type" value="${room?.room_type || ""}" placeholder="General, ICU, Private…"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Floor</label><input class="input" type="number" name="floor" value="${room?.floor ?? ""}"></div>
+          <div class="field"><label>Capacity</label><input class="input" type="number" name="capacity" value="${room?.capacity ?? ""}"></div>
+        </div>
+        <div class="field"><label>Status</label><select class="input" name="status">${statusOptions(room?.status || "Available")}</select></div>
+        <div id="rErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#rForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        room_number: fd.get("room_number"),
+        room_type: fd.get("room_type") || null,
+        floor: fd.get("floor") ? Number(fd.get("floor")) : null,
+        capacity: fd.get("capacity") ? Number(fd.get("capacity")) : null,
+        status: fd.get("status"),
+      };
+      try {
+        if (editing) await api.update("rooms", room.room_id, body);
+        else await api.create("rooms", body);
+        overlay.remove();
+        showToast(editing ? "Room updated." : "Room added.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#rErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prescriptions — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .item-row{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr .7fr auto;gap:8px;margin-bottom:8px;align-items:center}
+  .item-row .rm{background:none;border:none;color:var(--danger);cursor:pointer;font-size:18px;line-height:1}
+  @media (max-width:600px){.item-row{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("prescriptions", "Prescriptions");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Prescriptions</h2><p>Each prescription bundles one or more medicines for a patient visit.</p></div>
+      <button class="btn btn-primary" id="addBtn">New prescription</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Patient</th><th>Doctor</th><th>Date</th><th>Diagnosis</th><th>Items</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let patients = [], doctors = [], meds = [], scripts = [];
+  const pName = (id) => patients.find(p => p.patient_id === id)?.patient_name || `#${id}`;
+  const dName = (id) => doctors.find(d => d.doctor_id === id)?.doctor_name || `#${id}`;
+  const mName = (id) => meds.find(m => m.medicine_id === id)?.medicine_name || `#${id}`;
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!scripts.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No prescriptions yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = scripts.map((s) => `
+      <tr>
+        <td>#${s.prescription_id}</td>
+        <td>${pName(s.patient_id)}</td>
+        <td>${dName(s.doctor_id)}</td>
+        <td>${s.prescription_date}</td>
+        <td>${s.diagnosis || "—"}</td>
+        <td>${(s.items || []).map(i => `${mName(i.medicine_id)} · ${i.dosage || ""}`).join(", ") || "—"}</td>
+      </tr>`).join("");
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      [patients, doctors, meds, scripts] = await Promise.all([
+        api.list("patients"), api.list("doctors"), api.list("medicines"), api.list("prescriptions"),
+      ]);
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  const opts = (list, valKey, labelFn) => `<option value="">—</option>` + list.map((x) =>
+    `<option value="${x[valKey]}">${labelFn(x)}</option>`).join("");
+
+  function itemRowHtml() {
+    return `<div class="item-row">
+      <select class="input med-sel" required>${opts(meds, "medicine_id", m => m.medicine_name)}</select>
+      <input class="input dosage" placeholder="Dosage (5mg)">
+      <input class="input freq" placeholder="Frequency">
+      <input class="input dur" placeholder="Duration">
+      <input class="input qty" type="number" min="1" placeholder="Qty" required>
+      <button type="button" class="rm" title="Remove">&times;</button>
+    </div>`;
+  }
+
+  function openModal() {
+    if (!patients.length || !doctors.length || !meds.length) {
+      showToast("Add at least one patient, doctor, and medicine first.", true); return;
+    }
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>New prescription</h3>
+      <form id="rxForm">
+        <div class="grid-2">
+          <div class="field"><label>Patient</label><select class="input" name="patient_id" required>${opts(patients, "patient_id", p => p.patient_name)}</select></div>
+          <div class="field"><label>Doctor</label><select class="input" name="doctor_id" required>${opts(doctors, "doctor_id", d => d.doctor_name)}</select></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Date</label><input class="input" type="date" name="prescription_date" required value="${new Date().toISOString().slice(0,10)}"></div>
+          <div class="field"><label>Diagnosis</label><input class="input" name="diagnosis"></div>
+        </div>
+        <div class="field"><label>Notes</label><input class="input" name="notes"></div>
+        <div class="field">
+          <label>Medicines</label>
+          <div id="itemsWrap">${itemRowHtml()}</div>
+          <button type="button" class="btn btn-ghost" id="addItemBtn" style="margin-top:6px">+ Add medicine row</button>
+        </div>
+        <div id="rxErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save prescription</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    const itemsWrap = overlay.querySelector("#itemsWrap");
+
+    function wireRemove() {
+      itemsWrap.querySelectorAll(".rm").forEach((b) => b.onclick = () => {
+        if (itemsWrap.children.length > 1) b.closest(".item-row").remove();
+      });
+    }
+    wireRemove();
+    overlay.querySelector("#addItemBtn").onclick = () => {
+      itemsWrap.insertAdjacentHTML("beforeend", itemRowHtml());
+      wireRemove();
+    };
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+
+    overlay.querySelector("#rxForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const items = [...itemsWrap.querySelectorAll(".item-row")].map((row) => ({
+        medicine_id: Number(row.querySelector(".med-sel").value),
+        dosage: row.querySelector(".dosage").value || null,
+        frequency: row.querySelector(".freq").value || null,
+        duration: row.querySelector(".dur").value || null,
+        quantity: Number(row.querySelector(".qty").value || 1),
+      }));
+      const body = {
+        patient_id: Number(fd.get("patient_id")),
+        doctor_id: Number(fd.get("doctor_id")),
+        prescription_date: fd.get("prescription_date"),
+        diagnosis: fd.get("diagnosis") || null,
+        notes: fd.get("notes") || null,
+        items,
+      };
+      try {
+        await api.create("prescriptions", body);
+        overlay.remove();
+        showToast("Prescription saved.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#rxErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = openModal;
+  load();
+})();
+</script>
+</body>
+</html>

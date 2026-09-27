@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediBase — Sign in</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="auth-shell">
+  <div class="auth-side">
+    <div class="mark">MediBase</div>
+    <div class="pitch">
+      <h1>Hospital management, simplified.</h1>
+      <p>Manage patients, doctors, appointments, admissions, departments, and billing from one centralized system.</p>
+    </div>
+    <div class="foot">Secure • Centralized • Efficient</div>
+  </div>
+  <div class="auth-form-wrap">
+    <div class="auth-card">
+      <div class="tabs">
+        <div class="tab active" id="tabLogin">Sign in</div>
+        <div class="tab" id="tabSignup">Create account</div>
+      </div>
+
+      <div id="msg"></div>
+
+      <form id="loginForm">
+        <h2>Welcome back</h2>
+        <div class="sub">Sign in to open the dashboard.</div>
+        <div class="field"><label>Username</label><input class="input" name="username" required autofocus></div>
+        <div class="field"><label>Password</label><input class="input" name="password" type="password" required></div>
+        <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      </form>
+
+      <form id="signupForm" class="hidden">
+        <h2>Create an account</h2>
+        <div class="sub">You'll be signed in automatically after this.</div>
+        <div class="field"><label>Username</label><input class="input" name="username" required></div>
+        <div class="field"><label>Password</label><input class="input" name="password" type="password" required></div>
+        <button class="btn btn-primary btn-block" type="submit">Create account</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+// If already logged in, skip straight to the dashboard.
+if (getToken()) window.location.href = "dashboard.html";
+
+const tabLogin = document.getElementById("tabLogin");
+const tabSignup = document.getElementById("tabSignup");
+const loginForm = document.getElementById("loginForm");
+const signupForm = document.getElementById("signupForm");
+const msg = document.getElementById("msg");
+
+function showTab(which) {
+  msg.innerHTML = "";
+  const isLogin = which === "login";
+  tabLogin.classList.toggle("active", isLogin);
+  tabSignup.classList.toggle("active", !isLogin);
+  loginForm.classList.toggle("hidden", !isLogin);
+  signupForm.classList.toggle("hidden", isLogin);
+}
+tabLogin.onclick = () => showTab("login");
+tabSignup.onclick = () => showTab("signup");
+
+function setMsg(text, isError) {
+  msg.innerHTML = `<div class="form-msg ${isError ? "error" : "ok"}">${text}</div>`;
+}
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(loginForm);
+  const form = new URLSearchParams();
+  form.append("username", fd.get("username"));
+  form.append("password", fd.get("password"));
+  try {
+    const data = await apiFetch("/login", { method: "POST", body: form, form: true });
+    setToken(data.access_token);
+    window.location.href = "dashboard.html";
+  } catch (err) {
+    setMsg(err.message || "Incorrect username or password.", true);
+  }
+});
+
+signupForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(signupForm);
+  const username = fd.get("username"), password = fd.get("password");
+  try {
+    await apiFetch("/signup", { method: "POST", body: { username, password } });
+    // Auto login right after signup.
+    const form = new URLSearchParams();
+    form.append("username", username);
+    form.append("password", password);
+    const data = await apiFetch("/login", { method: "POST", body: form, form: true });
+    setToken(data.access_token);
+    window.location.href = "dashboard.html";
+  } catch (err) {
+    setMsg(err.message || "Could not create account.", true);
+  }
+});
+</script>
+</body>
+</html>

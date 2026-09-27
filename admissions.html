@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admissions — MediBase</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="appShell"></div>
+<script src="js/api.js"></script>
+<script>
+(async () => {
+  const content = await renderShell("admissions", "Admissions");
+
+  content.insertAdjacentHTML("beforeend", `
+    <div class="page-head">
+      <div><h2>Admissions</h2><p>Admitting a patient marks the room Occupied; discharging frees it back up automatically.</p></div>
+      <button class="btn btn-primary" id="addBtn">Admit patient</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>Patient</th><th>Room</th><th>Admitted</th><th>Discharged</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="empty-state">Loading…</td></tr></tbody>
+    </table></div>
+  `);
+
+  let patients = [], rooms = [], admissions = [];
+  const pName = (id) => patients.find(p => p.patient_id === id)?.patient_name || `#${id}`;
+  const rName = (id) => { const r = rooms.find(x => x.room_id === id); return r ? `Room ${r.room_number}` : `#${id}`; };
+
+  function render() {
+    const tbody = document.getElementById("rows");
+    if (!admissions.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No admissions yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = admissions.map((a) => {
+      const discharged = (a.status || "").toLowerCase() === "discharged";
+      return `
+      <tr>
+        <td>#${a.admission_id}</td>
+        <td>${pName(a.patient_id)}</td>
+        <td>${rName(a.room_id)}</td>
+        <td>${a.admission_date}</td>
+        <td>${a.discharge_date || "—"}</td>
+        <td>${a.reason || "—"}</td>
+        <td>${badge(a.status)}</td>
+        <td class="row-actions">
+          <button data-edit="${a.admission_id}">Edit</button>
+          ${discharged ? "" : `<button data-discharge="${a.admission_id}">Discharge</button>`}
+        </td>
+      </tr>`;
+    }).join("");
+    tbody.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openModal(admissions.find(x => x.admission_id == b.dataset.edit)));
+    tbody.querySelectorAll("[data-discharge]").forEach((b) => b.onclick = () => discharge(b.dataset.discharge));
+  }
+
+  async function load() {
+    const tbody = document.getElementById("rows");
+    try {
+      [patients, rooms, admissions] = await Promise.all([api.list("patients"), api.list("rooms"), api.list("admissions")]);
+      render();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="8" class="empty-state">${e.message}</td></tr>`;
+    }
+  }
+
+  async function discharge(id) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (!confirm("Discharge this patient and free up the room?")) return;
+    try {
+      await api.update("admissions", id, { discharge_date: today, status: "Discharged" });
+      showToast("Patient discharged, room freed.");
+      load();
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  const opts = (list, valKey, labelFn, sel) => `<option value="">—</option>` + list.map((x) =>
+    `<option value="${x[valKey]}" ${x[valKey] === sel ? "selected" : ""}>${labelFn(x)}</option>`).join("");
+
+  function openModal(adm) {
+    const editing = !!adm;
+    if (!patients.length || !rooms.length) { showToast("Add at least one patient and room first.", true); return; }
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+    overlay.appendChild(el("div", { class: "modal", html: `
+      <h3>${editing ? "Edit admission" : "Admit patient"}</h3>
+      <form id="admForm">
+        <div class="grid-2">
+          <div class="field"><label>Patient</label><select class="input" name="patient_id" required>${opts(patients, "patient_id", p => p.patient_name, adm?.patient_id)}</select></div>
+          <div class="field"><label>Room</label><select class="input" name="room_id" required>${opts(rooms, "room_id", r => `Room ${r.room_number} (${r.status})`, adm?.room_id)}</select></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Admission date</label><input class="input" type="date" name="admission_date" required value="${adm?.admission_date || new Date().toISOString().slice(0,10)}"></div>
+          <div class="field"><label>Discharge date</label><input class="input" type="date" name="discharge_date" value="${adm?.discharge_date || ""}"></div>
+        </div>
+        <div class="field"><label>Reason</label><input class="input" name="reason" value="${adm?.reason || ""}"></div>
+        <div id="admErr"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `}));
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cancelBtn").onclick = () => overlay.remove();
+    overlay.querySelector("#admForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const dischargeDate = fd.get("discharge_date") || null;
+      const body = {
+        patient_id: Number(fd.get("patient_id")),
+        room_id: Number(fd.get("room_id")),
+        admission_date: fd.get("admission_date"),
+        reason: fd.get("reason") || null,
+        status: dischargeDate ? "Discharged" : "Admitted",
+      };
+      if (dischargeDate) body.discharge_date = dischargeDate;
+      try {
+        if (editing) await api.update("admissions", adm.admission_id, body);
+        else await api.create("admissions", body);
+        overlay.remove();
+        showToast(editing ? "Admission updated." : "Patient admitted.");
+        load();
+      } catch (err) {
+        overlay.querySelector("#admErr").innerHTML = `<div class="form-msg error">${err.message}</div>`;
+      }
+    });
+  }
+
+  document.getElementById("addBtn").onclick = () => openModal(null);
+  load();
+})();
+</script>
+</body>
+</html>
